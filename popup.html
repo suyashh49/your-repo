@@ -1,0 +1,218 @@
+<!-- <!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <style>
+        body {
+            width: 350px;
+            padding: 20px;
+            font-family: 'Segoe UI', sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            margin: 0;
+        }
+        
+        .header {
+            text-align: center;
+            margin-bottom: 20px;
+        }
+        
+        .status {
+            padding: 10px;
+            border-radius: 8px;
+            margin-bottom: 15px;
+            text-align: center;
+            font-weight: bold;
+        }
+        
+        .status.connected { background: rgba(76, 175, 80, 0.3); }
+        .status.disconnected { background: rgba(244, 67, 54, 0.3); }
+        .status.processing { background: rgba(255, 193, 7, 0.3); }
+        
+        .controls {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+        
+        .btn {
+            padding: 12px;
+            border: none;
+            border-radius: 6px;
+            background: rgba(255, 255, 255, 0.2);
+            color: white;
+            cursor: pointer;
+            font-weight: bold;
+            transition: all 0.3s ease;
+        }
+        
+        .btn:hover {
+            background: rgba(255, 255, 255, 0.3);
+            transform: translateY(-2px);
+        }
+        
+        .btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+        
+        .stems-container {
+            margin-top: 20px;
+        }
+        
+        .stem-control {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 8px;
+            margin: 5px 0;
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 4px;
+        }
+        
+        .stem-control input[type="range"] {
+            flex: 1;
+            margin: 0 10px;
+        }
+        
+        .volume-label {
+            min-width: 80px;
+            font-size: 12px;
+        }
+        
+        .model-select {
+            margin: 10px 0;
+        }
+        
+        .model-select select {
+            width: 100%;
+            padding: 8px;
+            border-radius: 4px;
+            border: none;
+            background: rgba(255, 255, 255, 0.2);
+            color: white;
+        }
+        
+        .quality-settings {
+            margin: 15px 0;
+            padding: 10px;
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 4px;
+        }
+        
+        .settings-title {
+            font-size: 14px;
+            font-weight: bold;
+            margin-bottom: 10px;
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h2>🎵 Music Separator</h2>
+    </div>
+    
+    <div id="status" class="status disconnected">
+        Server Disconnected
+    </div>
+    
+    <div class="controls">
+        <button id="toggleSeparation" class="btn" disabled>
+            Start Separation
+        </button>
+        
+        <button id="resetSettings" class="btn">
+            Reset Settings
+        </button>
+    </div>
+    
+    <div class="model-select">
+        <label>Separation Model:</label>
+        <select id="modelSelect">
+            <option value="htdemucs">HT-Demucs (Fast)</option>
+            <option value="hdemucs_mmi">HD-Demucs MMI (High Quality)</option>
+            <option value="UVR-MDX-NET-Inst_1">MDX Instrumental</option>
+            <option value="1_HP-UVR">VR Network</option>
+        </select>
+    </div>
+    
+    <div class="quality-settings">
+        <div class="settings-title">Quality Settings</div>
+        <label>
+            <input type="checkbox" id="highQuality"> High Quality Mode
+        </label>
+        <label>
+            <input type="checkbox" id="realTimeMode" checked> Real-time Processing
+        </label>
+    </div>
+    
+    <div class="stems-container" id="stemsContainer" style="display: none;">
+        <h3>Stems Control</h3>
+        <div class="stem-control">
+            <span class="volume-label">Vocals:</span>
+            <input type="range" id="vocalsVolume" min="0" max="100" value="100">
+            <span id="vocalsValue">100%</span>
+        </div>
+        <div class="stem-control">
+            <span class="volume-label">Bass:</span>
+            <input type="range" id="bassVolume" min="0" max="100" value="100">
+            <span id="bassValue">100%</span>
+        </div>
+        <div class="stem-control">
+            <span class="volume-label">Drums:</span>
+            <input type="range" id="drumsVolume" min="0" max="100" value="100">
+            <span id="drumsValue">100%</span>
+        </div>
+        <div class="stem-control">
+            <span class="volume-label">Other:</span>
+            <input type="range" id="otherVolume" min="0" max="100" value="100">
+            <span id="otherValue">100%</span>
+        </div>
+    </div>
+    
+    <script src="popup.js"></script>
+</body>
+</html> -->
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Music Separator</title>
+    <style>
+        body { font-family: sans-serif; width: 300px; padding: 10px; }
+        .status { margin-bottom: 15px; padding: 10px; border: 1px solid #ccc; border-radius: 5px; }
+        .status.healthy { border-color: green; color: green; }
+        .status.unhealthy { border-color: red; color: red; }
+        .controls button { margin-top: 5px; padding: 8px; width: 100%; }
+        .stems label { display: block; margin-top: 10px; }
+        .stems input[type="range"] { width: 100%; }
+    </style>
+</head>
+<body>
+    <h3>Music Separator Controls</h3>
+    <div id="server-status" class="status">Checking server status...</div>
+
+    <div class="controls">
+        <button id="toggle-separation">Start Separation</button>
+    </div>
+
+    <div class="stems" id="stem-controls" style="display: none;">
+        <h4>Stem Volumes</h4>
+        <label for="vocals-volume">Vocals: <span id="vocals-value">100</span>%</label>
+        <input type="range" id="vocals-volume" name="vocals" min="0" max="100" value="100">
+
+        <label for="drums-volume">Drums: <span id="drums-value">100</span>%</label>
+        <input type="range" id="drums-volume" name="drums" min="0" max="100" value="100">
+
+        <label for="bass-volume">Bass: <span id="bass-value">100</span>%</label>
+        <input type="range" id="bass-volume" name="bass" min="0" max="100" value="100">
+
+        <label for="other-volume">Other: <span id="other-value">100</span>%</label>
+        <input type="range" id="other-volume" name="other" min="0" max="100" value="100">
+    </div>
+
+    <script src="popup.js"></script>
+</body>
+</html>
