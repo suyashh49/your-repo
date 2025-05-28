@@ -38,9 +38,14 @@ class AudioSeparationServer:
         self.http_port = http_port
         self.clients = set()
         self.current_model = None
-        self.model_config = None
+        self.model_config = {'model': 'hdemucs_mmi', 'realTime': True} 
         self.processing_queue = asyncio.Queue()
         self.is_processing = False
+
+        self.audio_buffer = []
+        self.buffer_target_samples = 44100 * 3  # 3 seconds of audio at 44.1kHz
+        self.current_sample_rate = 44100
+        self.current_channels = 2
         
         self.app = Flask(__name__)
         CORS(self.app)
@@ -130,9 +135,8 @@ class AudioSeparationServer:
     async def configure_model(self, websocket, config_data):
         """Configure the separation model"""
         try:
-            model_name = config_data.get('model', 'htdemucs') # Default model
-            # high_quality = config.get('highQuality', False) # Not directly used by UVR API models this way
-            real_time = config_data.get('realTime', True) # Affects segmentation for Demucs
+            model_name = config_data.get('model', self.model_config.get('model', 'hdemucs_mmi'))
+            real_time = config_data.get('realTime', self.model_config.get('realTime', True))
             
             logger.info(f"Configuring model: {model_name} with config: {config_data}")
             
@@ -141,6 +145,7 @@ class AudioSeparationServer:
             # This is a placeholder; actual metadata needs to be model-specific from UVR
             
             # Example: Demucs specific metadata (adjust as per UVR examples)
+            self.model_config = config_data 
             demucs_metadata = {
                 'segment': 2 if real_time else 10, # Example: smaller segment for real-time
                 'split': True,
@@ -165,14 +170,13 @@ class AudioSeparationServer:
                     logger.info(f"Loading VR model: {model_name}")
                     self.current_model = VrNetwork(name=model_name, other_metadata=vr_mdx_metadata, device=('cuda' if torch.cuda.is_available() else 'cpu'))
             else: # Fallback or if model_name is a generic type understood by UVR's auto-loader
-                logger.warning(f"Model type for '{model_name}' not explicitly handled, attempting generic load.")
-                # This part is tricky without knowing exactly how UVR's default loader works with just a name.
-                # For now, default to Demucs if unsure, or make it fail explicitly.
-                self.current_model = Demucs(name='htdemucs', other_metadata=demucs_metadata, device=('cuda' if torch.cuda.is_available() else 'cpu'))
-                model_name = 'htdemucs (defaulted)'
+                logger.warning(f"Model type for '{model_name}' not explicitly handled, attempting generic load with hdemucs_mmi.")
+                # Fallback to a known good Demucs model if type is unknown.
+                self.current_model = Demucs(name='hdemucs_mmi', other_metadata=demucs_metadata, device=('cuda' if torch.cuda.is_available() else 'cpu'))
+                model_name = 'hdemucs_mmi (defaulted due to unknown type)'
 
 
-            self.model_config = config_data # Store the received config
+            # self.model_config = config_data # Store the received config
             
             await websocket.send(json.dumps({
                 'type': 'status',
@@ -189,29 +193,50 @@ class AudioSeparationServer:
                 'error': error_msg
             }))
     
+   
+
     async def queue_audio_processing(self, websocket, data_payload):
-        """Queue audio data for processing"""
+        """Queue audio data for processing with buffering"""
         if not self.current_model:
             await websocket.send(json.dumps({'type': 'error', 'error': 'No model loaded/configured'}))
             return
         
         audio_data_list = data_payload.get('data')
+    
         if not audio_data_list:
-            logger.warning(f"QueueAudio: No model loaded! self.current_model is None. Config was: {self.model_config}")
+            logger.warning(f"No audio data in payload. Data payload keys: {list(data_payload.keys())}")
             await websocket.send(json.dumps({'type': 'error', 'error': 'No audio data in payload'}))
             return
 
-        #logger.info(f"Queueing audio data. Length: {len(audio_data_list)}")
-        await self.processing_queue.put({
-            'websocket': websocket,
-            'audio_data': np.array(audio_data_list, dtype=np.float32),
-            'timestamp': data_payload.get('timestamp', 0),
-            'channels': data_payload.get('channels', 2), # Get from client if available
-            'sample_rate': data_payload.get('sample_rate', 44100) # Get from client
-        })
+        self.current_sample_rate = data_payload.get('sample_rate', 44100)
+        self.current_channels = data_payload.get('channels', 2)
+
+        # Add incoming audio to buffer
+        self.audio_buffer.extend(audio_data_list)
         
-        if not self.is_processing:
-            asyncio.create_task(self.process_audio_queue())
+        # Process when we have enough audio buffered
+        if len(self.audio_buffer) >= self.buffer_target_samples * self.current_channels:
+            logger.info(f"Buffer full ({len(self.audio_buffer)} samples), processing audio...")
+            
+            # Extract buffer for processing
+            audio_to_process = self.audio_buffer[:self.buffer_target_samples * self.current_channels]
+            # Keep remaining samples for next processing cycle
+            self.audio_buffer = self.audio_buffer[self.buffer_target_samples * self.current_channels:]
+            
+            # Queue the buffered audio for processing
+            await self.processing_queue.put({
+                'websocket': websocket,
+                'audio_data': np.array(audio_to_process, dtype=np.float32),
+                'timestamp': data_payload.get('timestamp', 0),
+                'channels': self.current_channels,
+                'sample_rate': self.current_sample_rate
+            })
+            
+            if not self.is_processing:
+                asyncio.create_task(self.process_audio_queue())
+        else:
+            # Not enough data yet, just log progress
+            logger.debug(f"Buffering audio: {len(self.audio_buffer)}/{self.buffer_target_samples * self.current_channels} samples")
     
     async def process_audio_queue(self):
         """Process queued audio data"""
@@ -291,7 +316,7 @@ class AudioSeparationServer:
             # Most UVR models handle internal resampling if needed, but good to match SR.
             # The predict method of UVR models should return a dict: {'vocals': np.array, 'drums': np.array, ...}
             logger.info(f"Running separation on audio shape: {audio_input_np.shape}, SR: {sr}")
-            separated_output = self.current_model.predict(audio_input_np) 
+            separated_output = self.current_model.predict(audio_input_np, sampling_rate=sr) 
             
             if not isinstance(separated_output, dict):
                 logger.error(f"Model prediction did not return a dict. Got: {type(separated_output)}")

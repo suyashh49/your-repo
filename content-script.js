@@ -380,7 +380,9 @@ async function startSeparation(config) {
     await chrome.runtime.sendMessage({ type: 'INITIATE_CONNECTION' });
     
     // Configure model on backend
-    await chrome.runtime.sendMessage({ type: 'CONFIGURE_MODEL', config: config?.modelConfig || { model: 'htdemucs', realTime: true } });
+    // If config from popup contains modelConfig, use it, otherwise default to hdemucs_mmi
+    const modelConfig = config?.modelConfig || { model: 'hdemucs_mmi', realTime: true };
+    await chrome.runtime.sendMessage({ type: 'CONFIGURE_MODEL', config: modelConfig });
 
     if (audioElement) audioElement.muted = true; // Mute original audio
     if (workletNode) workletNode.connect(audioContext.destination); // This line is tricky. If the worklet passes audio through, this makes sense. If not, it shouldn't be connected. Our current worklet just buffers and sends.
@@ -442,55 +444,59 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     console.log('Content script received message:', message);
 
     if (message.type === 'START_SEPARATION') {
-        startSeparation(message.config)
+        // message.config now contains stemVolumes and modelConfig
+        startSeparation(message.config) 
             .then(sendResponse)
-            .catch(err => sendResponse({ error: err.message || 'Failed to start separation' }));
+            .catch(err => {
+                console.error("Error in startSeparation:", err);
+                sendResponse({ error: err.message || 'Failed to start separation' });
+            });
         return true; // Indicates an async response
     } else if (message.type === 'STOP_SEPARATION') {
         sendResponse(stopSeparation());
-        return false; 
+        // No return true needed as stopSeparation is synchronous
     } else if (message.type === 'SET_STEM_VOLUME') {
         setStemVolume(message.stem, message.volume);
         sendResponse({ status: `Volume set for ${message.stem}` });
-        return false;
     } else if (message.type === 'separated_audio') {
         // This is where we receive processed audio from the backend (via background.js)
-        console.log('Received separated audio:', message.stem, message.data.length);
-        // message.data should be an array of floats for a single stem
+        console.log('Received separated audio:', message.stem, /*message.data?.length*/); // Avoid error if data is missing
         playSeparatedStem(message.stem, message.data);
         sendResponse({status: "Stem received by content script"});
-        return false;
     } else if (message.type === 'WEBSOCKET_STATUS') {
         console.log('WebSocket status update from background:', message.status, message.error || '');
         if (message.status === 'error' || message.status === 'disconnected') {
-            // Handle WS error, maybe try to reconnect or notify user
             if (wsReconnectCount < WEBSOCKET_RECONNECT_ATTEMPTS && isSeparationActive) {
                 console.log('Attempting to reconnect WebSocket...');
                 wsReconnectCount++;
                 setTimeout(() => {
-                     chrome.runtime.sendMessage({ type: 'INITIATE_CONNECTION' });
-                }, 2000 * wsReconnectCount); // Exponential backoff
+                     // Tab ID is usually not needed when content script messages background.
+                     // Background script can get tab ID from 'sender.tab.id'.
+                     chrome.runtime.sendMessage({ type: 'INITIATE_CONNECTION' }); 
+                }, 2000 * wsReconnectCount); 
             } else if (isSeparationActive) {
-                console.error('Failed to reconnect WebSocket after multiple attempts.');
-                // Consider stopping separation or notifying user more permanently
-                stopSeparation(); // Stop if WS is persistently down
+                console.error('Failed to reconnect WebSocket after multiple attempts. Stopping separation.');
+                stopSeparation(); 
             }
         } else if (message.status === 'connected') {
-            wsReconnectCount = 0; // Reset reconnect counter on successful connection
+            wsReconnectCount = 0; 
         }
         sendResponse({status: "WebSocket status noted by content script"});
-        return false;
     } else if (message.type === 'status' && message.status) { // Status from server
         console.log("Server status/message:", message.status);
-        // Can display this in UI if needed
         sendResponse({status: "Server status noted by content script"});
-        return false;
-    } else if (message.type === 'error' && message.error) { // Error from server
-        console.error("Server error:", message.error);
-        // Can display this in UI if needed
+    } else if (message.type === 'error' && message.error) { // Error from server (forwarded by background)
+        console.error("Server error from backend:", message.error);
+        if (message.error.includes('No model loaded/configured') && isSeparationActive) {
+            console.log("Backend reports no model is loaded. Stopping separation in content script.");
+            stopSeparation(); // Reset content script state
+        }
+        // The popup will also receive this error from background.js and update its own UI.
         sendResponse({status: "Server error noted by content script"});
-        return false;
     }
+    // For synchronous listeners or if sendResponse is called, returning false or nothing is fine.
+    // Return true only if sendResponse will be called asynchronously.
+    return false; // Default for synchronous message handlers
 });
 
 // Optionally, let background script know this content script is ready,

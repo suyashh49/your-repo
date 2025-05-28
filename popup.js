@@ -1,4 +1,3 @@
-
 document.addEventListener('DOMContentLoaded', () => {
     const serverStatusDiv = document.getElementById('server-status');
     const toggleButton = document.getElementById('toggle-separation');
@@ -66,9 +65,18 @@ document.addEventListener('DOMContentLoaded', () => {
 
         // Send message to content script to start/stop
         try {
+            // Prepare the full config including modelConfig
+            let messageConfig = {};
+            if (isSeparating) {
+                messageConfig = {
+                    stemVolumes: getCurrentStemVolumes(), // Renamed for clarity
+                    modelConfig: { model: 'hdemucs_mmi', realTime: true } // Add model config here
+                };
+            }
+
             const response = await chrome.tabs.sendMessage(currentTabId, {
                 type: isSeparating ? 'START_SEPARATION' : 'STOP_SEPARATION',
-                config: isSeparating ? getCurrentStemConfig() : {}
+                config: messageConfig 
             });
             console.log('Message sent to content script, response:', response);
             if (response && response.status) {
@@ -103,16 +111,68 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     });
 
-    function getCurrentStemConfig() {
-        const config = {};
+    function getCurrentStemVolumes() { 
+        const volumes = {};
         Object.keys(stemVolumeSliders).forEach(stemName => {
             if(stemVolumeSliders[stemName]) {
-                config[stemName] = parseInt(stemVolumeSliders[stemName].value, 10) / 100;
+                volumes[stemName] = parseInt(stemVolumeSliders[stemName].value, 10) / 100;
             }
         });
-        return config;
+        return volumes;
     }
 
     // Initial check
     checkServerStatus();
+
+    // Listen for messages from the background script (e.g., server errors, status updates)
+    chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+        console.log("Popup received message from background:", message);
+        if (message.type === 'error') {
+            serverStatusDiv.textContent = `Server Error: ${message.error}`;
+            serverStatusDiv.className = 'status unhealthy';
+            // If the error indicates a critical failure, reset UI
+            if (message.error.includes("No model loaded") || 
+                message.error.includes("Failed to load or configure model") ||
+                message.error.includes("WebSocket connection error")) {
+                
+                isSeparating = false;
+                toggleButton.textContent = 'Start Separation';
+                stemControlsDiv.style.display = 'none';
+                // Consider disabling the button if the server/model is fundamentally broken
+                // toggleButton.disabled = true; 
+            }
+            // It's good practice to call sendResponse if the listener might be the last one.
+            // However, for runtime messages to popup, it's often not strictly needed if no reply is expected by sender.
+            // sendResponse({status: "Popup noted server error"}); 
+        } else if (message.type === 'status') {
+            serverStatusDiv.textContent = `Server: ${message.status}`;
+            if (message.status.includes("successfully")) {
+                 serverStatusDiv.className = 'status healthy';
+            } else if (message.status.includes("Failed") || message.status.includes("failed")) { // Broader check
+                 serverStatusDiv.className = 'status unhealthy';
+            }
+            // sendResponse({status: "Popup noted server status"});
+        } else if (message.type === 'WEBSOCKET_STATUS') {
+            console.log("Popup received WebSocket status:", message.status);
+            if (message.status === 'connected') {
+                // If server status was previously error, re-check, as WS is now up.
+                if (serverStatusDiv.className.includes('unhealthy')) {
+                    checkServerStatus(); 
+                } else {
+                    serverStatusDiv.textContent = 'Server: Connected';
+                    serverStatusDiv.className = 'status healthy';
+                }
+                toggleButton.disabled = false;
+            } else if (message.status === 'error' || message.status === 'disconnected') {
+                serverStatusDiv.textContent = `Server: WebSocket ${message.status}. ${message.error || ''}`;
+                serverStatusDiv.className = 'status unhealthy';
+                isSeparating = false;
+                toggleButton.textContent = 'Start Separation';
+                stemControlsDiv.style.display = 'none';
+                toggleButton.disabled = true; // Disable if WS is down or errored
+            }
+            // sendResponse({status: "Popup noted WebSocket status"});
+        }
+        // Return true if you intend to use sendResponse asynchronously. Not needed here.
+    });
 });
