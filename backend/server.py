@@ -42,8 +42,9 @@ class AudioSeparationServer:
         self.processing_queue = asyncio.Queue()
         self.is_processing = False
 
+        # Reduced buffer size for memory optimization
         self.audio_buffer = []
-        self.buffer_target_samples = 44100 * 3  # 3 seconds of audio at 44.1kHz
+        self.buffer_target_samples = 44100 * 1  # Reduced to 1 second
         self.current_sample_rate = 44100
         self.current_channels = 2
         
@@ -140,50 +141,53 @@ class AudioSeparationServer:
             
             logger.info(f"Configuring model: {model_name} with config: {config_data}")
             
-            # Simplified model loading based on UVR API structure
-            # Metadata might differ based on model type (Demucs, VR, MDX)
-            # This is a placeholder; actual metadata needs to be model-specific from UVR
+            # Force CPU-only operation with environment variable
+            os.environ['CUDA_VISIBLE_DEVICES'] = ''  # Disable CUDA
+            os.environ['PYTORCH_MPS_HIGH_WATERMARK_RATIO'] = '0.0'  # Disable MPS limits
             
-            # Example: Demucs specific metadata (adjust as per UVR examples)
+            # Optimized metadata for memory efficiency (removed device from here)
             self.model_config = config_data 
             demucs_metadata = {
-                'segment': 2 if real_time else 10, # Example: smaller segment for real-time
+                'segment': 1,  # Very small segment
                 'split': True,
-                'overlap': 0.25,
-                # 'shifts': 0 # If using Demucs v3/v4 with shifts
+                'overlap': 0.05,  # Minimal overlap
+                'shifts': 0      # No shifts
             }
             
-            # Example: VR/MDX specific metadata (aggressiveness, etc.)
+            # VR/MDX metadata with memory optimizations (removed device from here)
             vr_mdx_metadata = {
-                'aggressiveness': config_data.get('aggressiveness', 0.1) # Example
-                # Add other relevant params like 'window_size', 'primary_stem_only' etc.
+                'aggressiveness': config_data.get('aggressiveness', 0.05),
+                'batch_size': 1
             }
 
-            if 'demucs' in model_name.lower(): # General check
+            # Force CPU usage completely
+            device = 'cpu'
+            logger.info(f"Using device: {device} (forced CPU for memory efficiency)")
+
+            if 'demucs' in model_name.lower():
                  logger.info(f"Loading Demucs model: {model_name}")
-                 self.current_model = Demucs(name=model_name, other_metadata=demucs_metadata, device=('cuda' if torch.cuda.is_available() else 'cpu'))
-            elif model_name.startswith('UVR') or 'MDX' in model_name: # General check
+                 self.current_model = Demucs(name=model_name, other_metadata=demucs_metadata, device=device)
+            elif model_name.startswith('UVR') or 'MDX' in model_name:
                 if 'MDX' in model_name:
                     logger.info(f"Loading MDX model: {model_name}")
-                    self.current_model = MDX(name=model_name, other_metadata=vr_mdx_metadata, device=('cuda' if torch.cuda.is_available() else 'cpu'))
-                else: # VR Models
+                    self.current_model = MDX(name=model_name, other_metadata=vr_mdx_metadata, device=device)
+                else:
                     logger.info(f"Loading VR model: {model_name}")
-                    self.current_model = VrNetwork(name=model_name, other_metadata=vr_mdx_metadata, device=('cuda' if torch.cuda.is_available() else 'cpu'))
-            else: # Fallback or if model_name is a generic type understood by UVR's auto-loader
+                    self.current_model = VrNetwork(name=model_name, other_metadata=vr_mdx_metadata, device=device)
+            else:
                 logger.warning(f"Model type for '{model_name}' not explicitly handled, attempting generic load with hdemucs_mmi.")
-                # Fallback to a known good Demucs model if type is unknown.
-                self.current_model = Demucs(name='hdemucs_mmi', other_metadata=demucs_metadata, device=('cuda' if torch.cuda.is_available() else 'cpu'))
+                self.current_model = Demucs(name='hdemucs_mmi', other_metadata=demucs_metadata, device=device)
                 model_name = 'hdemucs_mmi (defaulted due to unknown type)'
-
-
-            # self.model_config = config_data # Store the received config
             
+            # Move model to CPU explicitly if it's not already
+            if hasattr(self.current_model, 'model') and hasattr(self.current_model.model, 'cpu'):
+                self.current_model.model = self.current_model.model.cpu()
+
             await websocket.send(json.dumps({
                 'type': 'status',
-                'status': f'Model {model_name} loaded/configured successfully'
+                'status': f'Model {model_name} loaded/configured successfully (CPU mode for memory efficiency)'
             }))
-            logger.info(f"Model {model_name} actually loaded/configured successfully. self.current_model is now: {type(self.current_model)}") # MODIFIED LOG
-            
+            logger.info(f"Model {model_name} loaded successfully on {device}. Type: {type(self.current_model)}")
             
         except Exception as e:
             error_msg = f"Failed to load or configure model '{config_data.get('model', 'N/A')}': {str(e)}"
@@ -267,6 +271,9 @@ class AudioSeparationServer:
                 audio_reshaped = audio_data_flat.reshape(num_frames, channels)
                 # Transpose to [channels, frames] which is common for PyTorch models
                 audio_for_model = audio_reshaped.T
+                
+                # Ensure it's a proper numpy array with float32 dtype
+                audio_for_model = np.asarray(audio_for_model, dtype=np.float32)
             else:
                 logger.error(f"Invalid audio data shape or channels. Flat length: {len(audio_data_flat)}, Channels: {channels}")
                 await websocket.send(json.dumps({'type': 'error', 'error': 'Invalid audio data for model processing'}))
@@ -282,9 +289,15 @@ class AudioSeparationServer:
             
             # Send each stem as a separate message for easier client handling
             for stem_name, stem_audio_np in separated_stems_dict.items():
+                # Ensure stem_audio_np is a numpy array
+                if hasattr(stem_audio_np, 'cpu'):  # It's a PyTorch tensor
+                    stem_audio_np = stem_audio_np.cpu().numpy()
+                elif not isinstance(stem_audio_np, np.ndarray):
+                    stem_audio_np = np.array(stem_audio_np)
+                
                 # UVR models might return multi-channel stems. For playback, often mono is fine.
-                # Or, send stereo if client can handle it. For now, let's average to mono.
                 if stem_audio_np.ndim > 1 and stem_audio_np.shape[0] > 1: # if [channels, samples] and channels > 1
+                    # Use numpy mean for numpy arrays
                     stem_mono_np = np.mean(stem_audio_np, axis=0)
                 else: # Already mono or [1, samples]
                     stem_mono_np = stem_audio_np.flatten()
@@ -304,35 +317,89 @@ class AudioSeparationServer:
                     'data': stem_data_list, # Send the list of samples
                     'timestamp': item['timestamp'] # Keep original timestamp for potential sync
                 }))
-            # logger.info(f"Sent {len(separated_stems_dict)} stems for timestamp {item['timestamp']}")
 
         except Exception as e:
             logger.error(f"Error separating audio: {e}", exc_info=True)
             await websocket.send(json.dumps({'type': 'error', 'error': f'Separation failed: {str(e)}'}))
     
-    def run_separation(self, audio_input_np, sr): # audio_input_np is [channels, samples]
+    def run_separation(self, audio_input_np, sr):
         """Run the actual separation (blocking operation)"""
         try:
-            # Most UVR models handle internal resampling if needed, but good to match SR.
-            # The predict method of UVR models should return a dict: {'vocals': np.array, 'drums': np.array, ...}
             logger.info(f"Running separation on audio shape: {audio_input_np.shape}, SR: {sr}")
-            separated_output = self.current_model.predict(audio_input_np, sampling_rate=sr) 
+            logger.info(f"Audio input type: {type(audio_input_np)}, dtype: {audio_input_np.dtype}")
+            
+            # Aggressive memory cleanup before processing
+            import gc
+            gc.collect()
+            
+            # Clear any existing caches
+            try:
+                if hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
+                    torch.mps.empty_cache()
+            except (AttributeError, RuntimeError):
+                pass
+            
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+            
+            # Ensure input is numpy array with correct dtype and contiguous memory layout
+            if not isinstance(audio_input_np, np.ndarray):
+                audio_input_np = np.array(audio_input_np)
+            
+            if audio_input_np.dtype != np.float32:
+                audio_input_np = audio_input_np.astype(np.float32)
+            
+            if not audio_input_np.flags['C_CONTIGUOUS']:
+                audio_input_np = np.ascontiguousarray(audio_input_np)
+            
+            # Further reduce audio length for memory safety
+            max_samples = sr * 1  # Maximum 1 second (was 2)
+            if audio_input_np.shape[-1] > max_samples:
+                logger.warning(f"Truncating audio from {audio_input_np.shape[-1]} to {max_samples} samples")
+                audio_input_np = audio_input_np[..., :max_samples]
+            
+            logger.info(f"Final audio input shape: {audio_input_np.shape}, dtype: {audio_input_np.dtype}")
+            
+            # Run separation with explicit CPU mode
+            with torch.no_grad():  # Disable gradient computation to save memory
+                separated_output = self.current_model.predict(audio_input_np, sampling_rate=sr)
+            
+            # Aggressive cleanup after processing
+            gc.collect()
+            try:
+                if hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
+                    torch.mps.empty_cache()
+            except (AttributeError, RuntimeError):
+                pass
+            
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
             
             if not isinstance(separated_output, dict):
                 logger.error(f"Model prediction did not return a dict. Got: {type(separated_output)}")
-                # Attempt to structure it if it's a tuple/list of arrays (older Demucs style)
                 if isinstance(separated_output, (list, tuple)) and all(isinstance(arr, np.ndarray) for arr in separated_output):
-                    stems = ['vocals', 'drums', 'bass', 'other'] # Default assumption
+                    stems = ['vocals', 'drums', 'bass', 'other']
                     separated_output = {stems[i]: separated_output[i] for i in range(min(len(stems), len(separated_output)))}
                 else:
                     raise ValueError("Model output format not recognized as a dictionary of stems.")
 
             logger.info(f"Separation successful. Got stems: {list(separated_output.keys())}")
-            return separated_output # This should be a dict like {'vocals': ndarray, 'drums': ndarray, ...}
+            return separated_output
                 
         except Exception as e:
             logger.error(f"Model separation error in run_separation: {e}", exc_info=True)
-            raise # Re-raise to be caught by separate_audio
+            # Cleanup on error too
+            import gc
+            gc.collect()
+            try:
+                if hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
+                    torch.mps.empty_cache()
+            except (AttributeError, RuntimeError):
+                pass
+            
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+            raise
     
     def run_http_server(self):
         """Run the HTTP server in a separate thread"""
