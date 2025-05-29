@@ -318,53 +318,110 @@ class HanceAudioSeparationServer:
             logger.error(f"Error separating audio with Hance: {e}", exc_info=True)
             await websocket.send(json.dumps({'type': 'error', 'error': f'Hance separation failed: {str(e)}'}))
     
+    def ensure_same_length(self, a, b):
+        """Ensure two arrays have the same length by truncating the longer one."""
+        if len(a) == len(b):
+            return a, b
+        
+        min_len = min(len(a), len(b))
+        return a[:min_len], b[:min_len]
+
     def run_hance_separation(self, audio_input):
         """Run Hance separation (much faster and more efficient than UVR)"""
         try:
             logger.info(f"Running Hance separation on audio shape: {audio_input.shape}")
+
+            mix_audio = np.mean(audio_input, axis=1) if audio_input.ndim > 1 else audio_input
             
             # Process audio with Hance - this returns the processed audio directly
-            separated_audio = self.processor.process(audio_input)
+            processed_audio = self.processor.process(audio_input)
             
             # Get number of output buses and their names
             num_buses = self.processor.get_number_of_output_buses()
+            bus_names = []
+
+            for i in range(num_buses):
+                bus_names.append(f"Available Hance output buses: {bus_names}")
             
+            logger.info(f"Available Hance output buses: {bus_names}")
             # Create stems dictionary
             stems = {}
             
             # Typically, stem separation models have multiple output buses
             # Let's map them to common stem names
-            stem_names = ['vocals', 'drums', 'bass', 'other']
+            has_vocals = any('vocal' in name for name in bus_names)
             
-            if separated_audio.ndim == 2:
-                # If we have multiple channels/buses in the output
-                for i in range(min(num_buses, separated_audio.shape[1])):
-                    bus_name = self.processor.get_output_bus_name(i)
-                    # Use the actual bus name if available, otherwise default names
-                    stem_name = bus_name.lower() if bus_name else (stem_names[i] if i < len(stem_names) else f'stem_{i}')
-                    stems[stem_name] = separated_audio[:, i]
+            if has_vocals:
+                        # Case 1: Model directly provides vocals output
+                        for i in range(min(num_buses, processed_audio.shape[1])):
+                            bus_name = self.processor.get_output_bus_name(i).lower()
+                            if 'vocal' in bus_name:
+                                stems['vocals'] = processed_audio[:, i]
+                                break
+                        
+                        # Create instrumental from original minus vocals
+                        if 'vocals' in stems:
+                            
+                            
+                            # Create instrumental as original minus vocals
+                            instrumental = mix_audio - stems['vocals'] * 0.8  # Scaled to avoid artifacts
+                            
+                            # Normalize 
+                            max_val = np.max(np.abs(instrumental))
+                            if max_val > 1e-5:
+                                instrumental = instrumental / max_val * 0.9
+                                
+                            stems['instrumental'] = instrumental
             else:
-                # Single output - might need to process each bus separately
-                # This approach processes the same audio through different bus configurations
-                for i in range(num_buses):
-                    # Configure to output only this bus
-                    for j in range(num_buses):
-                        self.processor.set_output_bus_volume(j, 1.0 if j == i else 0.0)
-                    
-                    # Process again for this specific stem
-                    bus_output = self.processor.process(audio_input)
-                    bus_name = self.processor.get_output_bus_name(i)
-                    stem_name = bus_name.lower() if bus_name else (stem_names[i] if i < len(stem_names) else f'stem_{i}')
-                    
-                    if bus_output.ndim == 2:
-                        stems[stem_name] = bus_output[:, 0]  # Take first channel
-                    else:
-                        stems[stem_name] = bus_output
+                # Case 2: Model provides instrumental components (bass, drums, etc.)
+                # Combine all stems as instrumental
+                instrumental_components = []
                 
-                # Reset all volumes to 1.0 for next processing
-                for j in range(num_buses):
-                    self.processor.set_output_bus_volume(j, 1.0)
+                for i in range(min(num_buses, processed_audio.shape[1])):
+                    bus_name = self.processor.get_output_bus_name(i).lower()
+                    instrumental_components.append(processed_audio[:, i])
+                
+                if instrumental_components:
+                    # Mix all components
+                    instrumental = np.zeros_like(instrumental_components[0])
+                    for component in instrumental_components:
+                        instrumental += component
+                    
+                    # Normalize
+                    max_val = np.max(np.abs(instrumental))
+                    if max_val > 1e-5:
+                        instrumental = instrumental / max_val * 0.9
+                    
+                    stems['instrumental'] = instrumental
+                    
+                    # Create vocals as original minus instrumental
+                    mix_audio_matched, instrumental_matched = self.ensure_same_length(mix_audio, stems['instrumental'])
+                    vocals = mix_audio_matched - instrumental_matched * 0.8
+                    
+                    # Normalize
+                    max_val = np.max(np.abs(vocals))
+                    if max_val > 1e-5:
+                        vocals = vocals / max_val * 0.9
+                        
+                    stems['vocals'] = vocals
+                else:
+                    # Fallback if no stems produced
+                    logger.warning("No stems produced by Hance model, using default values")
+                    stems['vocals'] = np.zeros(audio_input.shape[0])
+                    stems['instrumental'] = np.mean(audio_input, axis=1) if audio_input.ndim > 1 else audio_input
             
+            # Ensure both vocals and instrumental stems exist
+            if 'vocals' not in stems:
+                stems['vocals'] = np.zeros(processed_audio.shape[0])
+            if 'instrumental' not in stems:
+                stems['instrumental'] = np.zeros(processed_audio.shape[0])
+                
+            # For backward compatibility with extension expecting 4 stems
+            # Map the instrumental output to bass, drums, and other stems too
+            stems['bass'] = stems['instrumental'] * 0.7
+            stems['drums'] = stems['instrumental'] * 0.8
+            stems['other'] = stems['instrumental'] * 0.9
+                    
             logger.info(f"Hance separation successful. Generated stems: {list(stems.keys())}")
             return stems
                 

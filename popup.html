@@ -188,10 +188,12 @@
         .controls button { margin-top: 5px; padding: 8px; width: 100%; }
         .stems label { display: block; margin-top: 10px; }
         .stems input[type="range"] { width: 100%; }
+        .title { text-align: center; color: #555; }
+        .hance-info { font-size: 12px; color: #666; margin-top: 15px; background: #f5f5f5; padding: 8px; border-radius: 5px; }
     </style>
 </head>
 <body>
-    <h3>Music Separator Controls</h3>
+    <h3 class="title">Music Separator</h3>
     <div id="server-status" class="status">Checking server status...</div>
 
     <div class="controls">
@@ -199,18 +201,17 @@
     </div>
 
     <div class="stems" id="stem-controls" style="display: none;">
-        <h4>Stem Volumes</h4>
+        <h4>Stem Control</h4>
         <label for="vocals-volume">Vocals: <span id="vocals-value">100</span>%</label>
         <input type="range" id="vocals-volume" name="vocals" min="0" max="100" value="100">
 
-        <label for="drums-volume">Drums: <span id="drums-value">100</span>%</label>
-        <input type="range" id="drums-volume" name="drums" min="0" max="100" value="100">
-
-        <label for="bass-volume">Bass: <span id="bass-value">100</span>%</label>
-        <input type="range" id="bass-volume" name="bass" min="0" max="100" value="100">
-
-        <label for="other-volume">Other: <span id="other-value">100</span>%</label>
-        <input type="range" id="other-volume" name="other" min="0" max="100" value="100">
+        <label for="instrumental-volume">Instrumental: <span id="instrumental-value">100</span>%</label>
+        <input type="range" id="instrumental-volume" name="instrumental" min="0" max="100" value="100">
+    </div>
+    
+    <div class="hance-info">
+        Powered by Hance API<br>
+        Low-latency real-time audio separation
     </div>
 
     <script src="popup.js"></script>

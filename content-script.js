@@ -1,203 +1,11 @@
-// // Content script for YouTube Music integration
-// class YouTubeMusicSeparator {
-//     constructor() {
-//         this.isActive = false;
-//         this.audioContext = null;
-//         this.sourceNode = null;
-//         this.websocket = null;
-//         this.stemNodes = {};
-//         this.currentConfig = null;
-        
-//         this.injectAudioCapture();
-//         this.setupMessageListener();
-//     }
-    
-//     injectAudioCapture() {
-//         // Inject our audio capture script into the page context
-//         const script = document.createElement('script');
-//         script.src = chrome.runtime.getURL('injected-script.js');
-//         script.onload = function() {
-//             this.remove();
-//         };
-//         (document.head || document.documentElement).appendChild(script);
-        
-//         // Listen for messages from injected script
-//         window.addEventListener('message', (event) => {
-//             if (event.source !== window) return;
-            
-//             if (event.data.type === 'AUDIO_CONTEXT_READY') {
-//                 this.handleAudioContextReady(event.data.audioContext);
-//             } else if (event.data.type === 'AUDIO_DATA') {
-//                 this.handleAudioData(event.data.audioData);
-//             }
-//         });
-//     }
-    
-//     setupMessageListener() {
-//         chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-//             switch (message.action) {
-//                 case 'startSeparation':
-//                     this.startSeparation(message.config);
-//                     break;
-//                 case 'stopSeparation':
-//                     this.stopSeparation();
-//                     break;
-//                 case 'updateStemVolume':
-//                     this.updateStemVolume(message.stem, message.volume);
-//                     break;
-//             }
-            
-//             sendResponse({ success: true });
-//         });
-//     }
-    
-//     async startSeparation(config) {
-//         try {
-//             this.currentConfig = config;
-//             this.isActive = true;
-            
-//             // Connect to WebSocket server
-//             await this.connectWebSocket(config.serverUrl);
-            
-//             // Initialize audio processing
-//             await this.initializeAudioProcessing();
-            
-//             // Start audio capture
-//             window.postMessage({ type: 'START_AUDIO_CAPTURE' }, '*');
-            
-//         } catch (error) {
-//             console.error('Failed to start separation:', error);
-//             this.isActive = false;
-//         }
-//     }
-    
-//     async stopSeparation() {
-//         this.isActive = false;
-        
-//         // Stop audio capture
-//         window.postMessage({ type: 'STOP_AUDIO_CAPTURE' }, '*');
-        
-//         // Disconnect WebSocket
-//         if (this.websocket) {
-//             this.websocket.close();
-//             this.websocket = null;
-//         }
-        
-//         // Clean up audio nodes
-//         this.cleanupAudioProcessing();
-//     }
-    
-//     async connectWebSocket(serverUrl) {
-//         return new Promise((resolve, reject) => {
-//             const wsUrl = serverUrl.replace('http://', 'ws://') + '/ws';
-//             this.websocket = new WebSocket(wsUrl);
-            
-//             this.websocket.onopen = () => {
-//                 console.log('WebSocket connected');
-                
-//                 // Send configuration
-//                 this.websocket.send(JSON.stringify({
-//                     type: 'configure',
-//                     config: this.currentConfig
-//                 }));
-                
-//                 resolve();
-//             };
-            
-//             this.websocket.onmessage = (event) => {
-//                 const data = JSON.parse(event.data);
-//                 this.handleServerMessage(data);
-//             };
-            
-//             this.websocket.onerror = (error) => {
-//                 console.error('WebSocket error:', error);
-//                 reject(error);
-//             };
-            
-//             this.websocket.onclose = () => {
-//                 console.log('WebSocket disconnected');
-//                 if (this.isActive) {
-//                     // Try to reconnect
-//                     setTimeout(() => this.connectWebSocket(serverUrl), 2000);
-//                 }
-//             };
-//         });
-//     }
-    
-//     async initializeAudioProcessing() {
-//         // This will be called when we receive the AudioContext from the injected script
-//         // For now, we'll set up the stem processing nodes
-//         this.stemNodes = {
-//             vocals: null,
-//             bass: null,
-//             drums: null,
-//             other: null
-//         };
-//     }
-    
-//     handleAudioContextReady(audioContextInfo) {
-//         console.log('Audio context ready:', audioContextInfo);
-//         // Store audio context information for processing
-//     }
-    
-//     handleAudioData(audioData) {
-//         if (!this.isActive || !this.websocket) return;
-        
-//         // Send audio data to server for separation
-//         this.websocket.send(JSON.stringify({
-//             type: 'audio_data',
-//             data: Array.from(audioData),
-//             timestamp: Date.now()
-//         }));
-//     }
-    
-//     handleServerMessage(message) {
-//         switch (message.type) {
-//             case 'separated_audio':
-//                 this.playSeparatedAudio(message.stems);
-//                 break;
-//             case 'error':
-//                 console.error('Server error:', message.error);
-//                 break;
-//             case 'status':
-//                 console.log('Server status:', message.status);
-//                 break;
-//         }
-//     }
-    
-//     playSeparatedAudio(stems) {
-//         // Play the separated stems through the Web Audio API
-//         window.postMessage({
-//             type: 'PLAY_SEPARATED_AUDIO',
-//             stems: stems
-//         }, '*');
-//     }
-    
-//     updateStemVolume(stem, volume) {
-//         window.postMessage({
-//             type: 'UPDATE_STEM_VOLUME',
-//             stem: stem,
-//             volume: volume
-//         }, '*');
-//     }
-    
-//     cleanupAudioProcessing() {
-//         // Clean up any audio processing nodes
-//         this.stemNodes = {};
-//     }
-// }
-
-// // Initialize when DOM is ready
-// if (document.readyState === 'loading') {
-//     document.addEventListener('DOMContentLoaded', () => {
-//         new YouTubeMusicSeparator();
-//     });
-// } else {
-//     new YouTubeMusicSeparator();
-// }
-
 // content-script.js
 console.log('Music Separator content script loaded.');
+
+// Add this at the beginning of the file (with other variables)
+
+let separatedInstrumentalSource = null;
+let instrumentalGainNode = null;
+
 
 let audioContext = null;
 let audioSourceNode = null;
@@ -255,6 +63,7 @@ async function setupAudioProcessing() {
         });
         
         console.log('AudioContext created. Sample rate:', audioContext.sampleRate);
+        
         if (audioContext.sampleRate !== TARGET_SAMPLE_RATE) {
             console.warn(`Requested ${TARGET_SAMPLE_RATE}Hz but got ${audioContext.sampleRate}Hz. Resampling might be needed or models might not perform optimally.`);
             // We'll proceed, but the server might need to handle resampling or we add a client-side resampler.
@@ -301,14 +110,10 @@ async function setupAudioProcessing() {
 
         // Setup gain nodes for separated stem playback
         vocalsGainNode = audioContext.createGain();
-        drumsGainNode = audioContext.createGain();
-        bassGainNode = audioContext.createGain();
-        otherGainNode = audioContext.createGain();
+        instrumentalGainNode = audioContext.createGain();
 
         vocalsGainNode.connect(audioContext.destination);
-        drumsGainNode.connect(audioContext.destination);
-        bassGainNode.connect(audioContext.destination);
-        otherGainNode.connect(audioContext.destination);
+        instrumentalGainNode.connect(audioContext.destination);
 
         console.log('Audio processing setup complete.');
         return true;
@@ -342,18 +147,12 @@ function playSeparatedStem(stemName, audioBufferArray) {
         if (separatedVocalsSource) separatedVocalsSource.stop();
         separatedVocalsSource = sourceNode;
         gainNode = vocalsGainNode;
-    } else if (stemName === 'drums') {
-        if (separatedDrumsSource) separatedDrumsSource.stop();
-        separatedDrumsSource = sourceNode;
-        gainNode = drumsGainNode;
-    } else if (stemName === 'bass') {
-        if (separatedBassSource) separatedBassSource.stop();
-        separatedBassSource = sourceNode;
-        gainNode = bassGainNode;
-    } else if (stemName === 'other') {
-        if (separatedOtherSource) separatedOtherSource.stop();
-        separatedOtherSource = sourceNode;
-        gainNode = otherGainNode;
+    } 
+    else if (stemName === 'instrumental' || stemName === 'bass' || stemName === 'drums' || stemName === 'other') {
+        // Map any non-vocal stem to instrumental
+        if (separatedInstrumentalSource) separatedInstrumentalSource.stop();
+        separatedInstrumentalSource = sourceNode;
+        gainNode = instrumentalGainNode;
     }
 
     if (gainNode) {
@@ -410,13 +209,11 @@ function stopSeparation() {
     
     if (audioElement) audioElement.muted = false; // Unmute original audio
 
-    // Stop any playing separated stems
     if (separatedVocalsSource) separatedVocalsSource.stop();
-    if (separatedDrumsSource) separatedDrumsSource.stop();
-    if (separatedBassSource) separatedBassSource.stop();
-    if (separatedOtherSource) separatedOtherSource.stop();
+    if (separatedInstrumentalSource) separatedInstrumentalSource.stop();
     separatedVocalsSource = null;
-    // etc.
+    separatedInstrumentalSource = null;
+
 
     isSeparationActive = false;
     chrome.runtime.sendMessage({ type: 'STOP_WEBSOCKET' }); // Tell background to close WS
@@ -429,10 +226,16 @@ function setStemVolume(stemName, volume) { // volume is 0.0 to 1.0
     if (!audioContext || audioContext.state === 'closed') return;
     
     let gainNode;
-    if (stemName === 'vocals') gainNode = vocalsGainNode;
-    else if (stemName === 'drums') gainNode = drumsGainNode;
-    else if (stemName === 'bass') gainNode = bassGainNode;
-    else if (stemName === 'other') gainNode = otherGainNode;
+    if (stemName === 'vocals') {
+        gainNode = vocalsGainNode;
+    }
+    else if (stemName === 'instrumental') {
+        gainNode = instrumentalGainNode;
+    }
+    // For backward compatibility, map old stem names
+    else if (stemName === 'drums' || stemName === 'bass' || stemName === 'other') {
+        gainNode = instrumentalGainNode;
+    }
 
     if (gainNode) {
         gainNode.gain.setValueAtTime(volume, audioContext.currentTime);

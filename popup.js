@@ -4,18 +4,14 @@ document.addEventListener('DOMContentLoaded', () => {
     const stemControlsDiv = document.getElementById('stem-controls');
     const stemVolumeSliders = {
         vocals: document.getElementById('vocals-volume'),
-        drums: document.getElementById('drums-volume'),
-        bass: document.getElementById('bass-volume'),
-        other: document.getElementById('other-volume')
+        instrumental: document.getElementById('instrumental-volume')
     };
     const stemValueDisplays = {
         vocals: document.getElementById('vocals-value'),
-        drums: document.getElementById('drums-value'),
-        bass: document.getElementById('bass-value'),
-        other: document.getElementById('other-value')
+        instrumental: document.getElementById('instrumental-value')
     };
 
-    const HTTP_SERVER_URL = 'http://localhost:8766'; // Correct port for Flask HTTP server
+    const HTTP_SERVER_URL = 'http://localhost:8766';
     let isSeparating = false;
     let currentTabId = null;
 
@@ -28,8 +24,6 @@ document.addEventListener('DOMContentLoaded', () => {
 
     async function checkServerStatus() {
         try {
-            // --- THIS IS THE FIX ---
-            // The health check endpoint is on the HTTP server (port 8766)
             const response = await fetch(`${HTTP_SERVER_URL}/health`);
             if (!response.ok) {
                 throw new Error(`HTTP error! status: ${response.status}`);
@@ -69,8 +63,8 @@ document.addEventListener('DOMContentLoaded', () => {
             let messageConfig = {};
             if (isSeparating) {
                 messageConfig = {
-                    stemVolumes: getCurrentStemVolumes(), // Renamed for clarity
-                    modelConfig: { model: 'hdemucs_mmi', realTime: true } // Add model config here
+                    stemVolumes: getCurrentStemVolumes(),
+                    modelConfig: { model: 'music_stem_fast', realTime: true } // Use Hance model directly
                 };
             }
 
@@ -124,38 +118,30 @@ document.addEventListener('DOMContentLoaded', () => {
     // Initial check
     checkServerStatus();
 
-    // Listen for messages from the background script (e.g., server errors, status updates)
+    // Listen for messages from the background script
     chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         console.log("Popup received message from background:", message);
         if (message.type === 'error') {
             serverStatusDiv.textContent = `Server Error: ${message.error}`;
             serverStatusDiv.className = 'status unhealthy';
-            // If the error indicates a critical failure, reset UI
             if (message.error.includes("No model loaded") || 
-                message.error.includes("Failed to load or configure model") ||
+                message.error.includes("Failed to load") ||
                 message.error.includes("WebSocket connection error")) {
                 
                 isSeparating = false;
                 toggleButton.textContent = 'Start Separation';
                 stemControlsDiv.style.display = 'none';
-                // Consider disabling the button if the server/model is fundamentally broken
-                // toggleButton.disabled = true; 
             }
-            // It's good practice to call sendResponse if the listener might be the last one.
-            // However, for runtime messages to popup, it's often not strictly needed if no reply is expected by sender.
-            // sendResponse({status: "Popup noted server error"}); 
         } else if (message.type === 'status') {
             serverStatusDiv.textContent = `Server: ${message.status}`;
             if (message.status.includes("successfully")) {
                  serverStatusDiv.className = 'status healthy';
-            } else if (message.status.includes("Failed") || message.status.includes("failed")) { // Broader check
+            } else if (message.status.includes("Failed") || message.status.includes("failed")) {
                  serverStatusDiv.className = 'status unhealthy';
             }
-            // sendResponse({status: "Popup noted server status"});
         } else if (message.type === 'WEBSOCKET_STATUS') {
             console.log("Popup received WebSocket status:", message.status);
             if (message.status === 'connected') {
-                // If server status was previously error, re-check, as WS is now up.
                 if (serverStatusDiv.className.includes('unhealthy')) {
                     checkServerStatus(); 
                 } else {
@@ -169,10 +155,8 @@ document.addEventListener('DOMContentLoaded', () => {
                 isSeparating = false;
                 toggleButton.textContent = 'Start Separation';
                 stemControlsDiv.style.display = 'none';
-                toggleButton.disabled = true; // Disable if WS is down or errored
+                toggleButton.disabled = true;
             }
-            // sendResponse({status: "Popup noted WebSocket status"});
         }
-        // Return true if you intend to use sendResponse asynchronously. Not needed here.
     });
 });
